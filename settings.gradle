@@ -1,0 +1,10 @@
+rootProject.name = 'io.jrevolt.tools'
+
+include 'tomcat'
+
+//rootProject.children.each { it.name = "$rootProject.name.$it.name" }
+
+
+
+
+
