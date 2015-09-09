@@ -27,8 +27,10 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.util.Formatter;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -57,7 +59,12 @@ public class Main {
     @Autowired
     Tomcat tomcat;
 
-    List<StandardContext> contexts = new LinkedList<StandardContext>();
+    ///
+
+    List<AppInfo> apps = new LinkedList<>();
+    Map<Artifact, AppInfo> index = new HashMap<>();
+
+    ///
 
     @Bean
     Tomcat tomcat() throws ServletException {
@@ -91,14 +98,11 @@ public class Main {
                 Formatter f = new Formatter(resp.getWriter());
                 f.format("<html><body><table border=1>");
                 f.format("<tr><th>Context</th><th>Artifact</th><th>Deployed</th><th>Available</th></tr>");
-                for (StandardContext c : contexts) {
-                    String gav = (String) c.getServletContext().getAttribute("mvn.uri");
-                    Artifact artifact = (Artifact) c.getServletContext().getAttribute("mvn.artifact");
-                    Artifact update = gav != null ? RepositorySupport.resolve(gav) : null;
+                for (AppInfo app : apps) {
                     f.format("<tr><td><a href='%s'>%1$s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>",
-                            c.getPath(), gav,
-                            artifact.getResolvedVersion(),
-                            update != null ? update.getResolvedVersion() : null
+                            app.contextPath, app.artifact.asString(false),
+                            app.artifact.getResolvedVersion(),
+                            null
                     );
                 }
                 f.format("</table>");
@@ -111,17 +115,13 @@ public class Main {
         tomcat.addServlet("", "Update", new HttpServlet() {
             @Override
             protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-                for (StandardContext c : contexts) {
+                updateApps();
+                for (AppInfo app : apps) {
                     try {
-                        String gav = (String) c.getServletContext().getAttribute("mvn.uri");
-                        Artifact update = gav != null ? RepositorySupport.resolve(gav) : null;
-                        if (update == null) { continue; }
+                        StandardContext c = app.context;
                         c.stop();
-                        c.setDocBase(update.getFile().getAbsolutePath());
-                        c.getServletContext().setAttribute("mvn.uri", gav);
-                        c.getServletContext().setAttribute("mvn.artifact", update);
+                        c.setDocBase(app.artifact.getFile().getAbsolutePath());
                         c.start();
-                        System.out.println(update.getFile());
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -137,34 +137,47 @@ public class Main {
             Assert.isTrue(m.matches());
             String path = m.group(1);
             String gav = m.group(2);
-            Artifact artifact = RepositorySupport.resolve(gav);
-            if (artifact == null || artifact.getFile() == null) {
-                Log.error(null, "Cannot resolve artifact %s", gav);
-                continue;
-            }
-            try {
-                StandardContext c = (StandardContext) tomcat.addWebapp(
-                        path != null ? path : artifact.getArtifactId(),
-                        artifact.getFile().getAbsolutePath());
-                c.setPrivileged(true);
-                c.getServletContext().setAttribute("mvn.uri", gav);
-                c.getServletContext().setAttribute("mvn.artifact", artifact);
-                contexts.add(c);
-            } catch (ServletException e) {
-                throw new RuntimeException(e);
-            }
+            Artifact artifact = Artifact.parse(gav);
+            AppInfo app = new AppInfo(
+                    path != null ? path : artifact.getArtifactId(),
+                    artifact);
+            apps.add(app);
+            index.put(artifact, app);
         }
 
+        updateApps();
+
+        for (AppInfo app : apps) {
+            StandardContext c = (StandardContext) tomcat.addWebapp(
+                    app.contextPath,  app.artifact.getFile().getAbsolutePath());
+            c.setPrivileged(true);
+            app.context = c;
+        }
+
+
+
+
         return tomcat;
+    }
+
+    private void updateApps() {
+        List<Artifact> artifacts = new LinkedList<>();
+        for (AppInfo app : apps) {
+            artifacts.add(app.artifact);
+        }
+        List<Artifact> resolved = RepositorySupport.resolve(null, artifacts);
+        for (Artifact artifact : resolved) {
+            index.get(artifact).artifact = artifact;
+        }
     }
 
     void run(String[] args) {
         try {
             tomcat.start();
 
-            for (StandardContext c : contexts) {
+            for (AppInfo app : apps) {
                 try {
-                    c.start();
+                    app.context.start();
                 } catch (LifecycleException e) {
                     e.printStackTrace();
                 }
