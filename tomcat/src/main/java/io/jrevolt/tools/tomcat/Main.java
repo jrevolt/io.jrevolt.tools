@@ -30,6 +30,8 @@ import java.util.Formatter;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * @author <a href="mailto:patrikbeno@gmail.com">Patrik Beno</a>
@@ -66,6 +68,11 @@ public class Main {
         tomcat.setPort(port);
         tomcat.setBaseDir(basedir.getAbsolutePath());
         tomcat.getHost().setStartStopThreads(3);
+        tomcat.getHost().setDeployOnStartup(false);
+
+        tomcat.addUser("admin", "admin");
+        tomcat.addRole("admin", "manager-gui");
+        tomcat.addRole("admin", "admin-gui");
 
         RemoteIpValve v = new RemoteIpValve();
         v.setProtocolHeader("X-Forwarded-Proto");
@@ -88,7 +95,7 @@ public class Main {
                     String gav = (String) c.getServletContext().getAttribute("mvn.uri");
                     Artifact artifact = (Artifact) c.getServletContext().getAttribute("mvn.artifact");
                     Artifact update = gav != null ? RepositorySupport.resolve(gav) : null;
-                    f.format("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+                    f.format("<tr><td><a href='%s'>%1$s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>",
                             c.getPath(), gav,
                             artifact.getResolvedVersion(),
                             update != null ? update.getResolvedVersion() : null
@@ -124,19 +131,22 @@ public class Main {
         });
         ctx.addServletMapping("/update", "Update");
 
+        Pattern parser = Pattern.compile("(?:([^=]+)=)?(.*)");
         for (String s : webapps) {
-            String[] parts = s.split("=");
-            String path = parts[0];
-            String gav = parts[1];
+            Matcher m = parser.matcher(s);
+            Assert.isTrue(m.matches());
+            String path = m.group(1);
+            String gav = m.group(2);
             Artifact artifact = RepositorySupport.resolve(gav);
             if (artifact == null || artifact.getFile() == null) {
                 Log.error(null, "Cannot resolve artifact %s", gav);
                 continue;
             }
             try {
-                StandardContext c = (StandardContext) tomcat.addWebapp(path, artifact.getFile().getAbsolutePath());
+                StandardContext c = (StandardContext) tomcat.addWebapp(
+                        path != null ? path : artifact.getArtifactId(),
+                        artifact.getFile().getAbsolutePath());
                 c.setPrivileged(true);
-                c.setReloadable(true);
                 c.getServletContext().setAttribute("mvn.uri", gav);
                 c.getServletContext().setAttribute("mvn.artifact", artifact);
                 contexts.add(c);
@@ -151,6 +161,15 @@ public class Main {
     void run(String[] args) {
         try {
             tomcat.start();
+
+            for (StandardContext c : contexts) {
+                try {
+                    c.start();
+                } catch (LifecycleException e) {
+                    e.printStackTrace();
+                }
+            }
+
             new CountDownLatch(1).await();
         } catch (Exception e) {
             throw new UnsupportedOperationException(e);
