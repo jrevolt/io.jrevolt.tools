@@ -2,7 +2,7 @@ buildscript {
 	println("Using profile: ${profile}")
 	File f = new File("${project.projectDir}/gradle-${profile}.properties")
 	if (f.exists()) {
-		println("Loading $f.absolutePath")
+		println("Loading $f.getName()")
 		Properties props = new Properties()
 		props.load(f.newDataInputStream())
 		for (String s : props.stringPropertyNames()) {
@@ -33,10 +33,9 @@ ext {
 	branchShort = branch.replaceFirst(".*/", "")
 	commit = "$git rev-parse HEAD".execute().in.text.trim()
 	commitShort = commit.substring(0, 7)
-	tag = branch.matches("master") ? "$git describe --tags --exact-match".execute().in.text.trim() : null
-	gitDescribe = "$git describe --tags --always --long".execute().in.text.trim()
+	gitDescribe = "$git describe --match=${basetag} --tags --dirty".execute().in.text.trim()
 	snapshotVersion = "${branchShort}-SNAPSHOT"
-	releaseVersion = tag ? "${tag}-${commitShort}" : null
+	releaseVersion = "${gitDescribe}"
 }
 
 allprojects {
@@ -49,8 +48,8 @@ subprojects {
 	apply plugin: 'distribution'
 	//apply plugin: org.springframework.boot.gradle.SpringBootPlugin
 
-	group = rootProject.name
-	version = "${releaseVersion ?: snapshotVersion}"
+	project.group = rootProject.name
+	project.version = Boolean.valueOf("${release}") ? "${releaseVersion}" : "${snapshotVersion}"
 
 	sourceCompatibility = 1.7
 	targetCompatibility = 1.7
