@@ -2,14 +2,8 @@ package io.jrevolt.tools.tomcat;
 
 import io.jrevolt.launcher.RepositorySupport;
 import io.jrevolt.launcher.mvn.Artifact;
-import io.jrevolt.launcher.util.Log;
 import io.jrevolt.launcher.vault.VaultConfiguration;
-import org.apache.catalina.Context;
-import org.apache.catalina.LifecycleException;
-import org.apache.catalina.core.StandardContext;
-import org.apache.catalina.core.StandardEngine;
-import org.apache.catalina.startup.Tomcat;
-import org.apache.catalina.valves.RemoteIpValve;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -18,7 +12,13 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.util.Assert;
-import org.springframework.util.StringUtils;
+
+import org.apache.catalina.Context;
+import org.apache.catalina.core.StandardContext;
+import org.apache.catalina.core.StandardEngine;
+import org.apache.catalina.core.StandardHost;
+import org.apache.catalina.startup.Tomcat;
+import org.apache.catalina.valves.RemoteIpValve;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * @author <a href="mailto:patrikbeno@gmail.com">Patrik Beno</a>
@@ -76,6 +77,7 @@ public class Main {
         tomcat.setBaseDir(basedir.getAbsolutePath());
         tomcat.getHost().setStartStopThreads(3);
         tomcat.getHost().setDeployOnStartup(false);
+        //((StandardHost) tomcat.getHost()).setStartChildren(false);
 
         tomcat.addUser("admin", "admin");
         tomcat.addRole("admin", "manager-gui");
@@ -93,6 +95,8 @@ public class Main {
                     resp.sendError(HttpServletResponse.SC_NOT_FOUND);
                     return;
                 }
+
+                updateApps();
 
                 resp.setContentType("text/html");
                 Formatter f = new Formatter(resp.getWriter());
@@ -118,10 +122,19 @@ public class Main {
                 updateApps();
                 for (AppInfo app : apps) {
                     try {
-                        StandardContext c = app.context;
-                        c.stop();
-                        c.setDocBase(app.artifact.getFile().getAbsolutePath());
+                        if (app.context != null) { app.context.stop(); }
+                        tomcat.getHost().removeChild(app.context);
+                        app.context = null;
+
+                        StandardContext c = (StandardContext) tomcat.addWebapp(
+                              app.contextPath,  app.artifact.getFile().getAbsolutePath());
+                        c.setPrivileged(true);
+                        c.setResources(new MyWebRoot(c, app));
+
+                        app.context = c;
+
                         c.start();
+
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -145,44 +158,22 @@ public class Main {
             index.put(artifact, app);
         }
 
-        updateApps();
-
-        for (AppInfo app : apps) {
-            StandardContext c = (StandardContext) tomcat.addWebapp(
-                    app.contextPath,  app.artifact.getFile().getAbsolutePath());
-            c.setPrivileged(true);
-            app.context = c;
-        }
-
-
-
-
         return tomcat;
     }
 
     private void updateApps() {
-        List<Artifact> artifacts = new LinkedList<>();
         for (AppInfo app : apps) {
-            artifacts.add(app.artifact);
-        }
-        List<Artifact> resolved = RepositorySupport.resolve(null, artifacts);
-        for (Artifact artifact : resolved) {
-            index.get(artifact).artifact = artifact;
+            Artifact war = Artifact.parse(app.artifact.asString());
+            List<Artifact> resolved = RepositorySupport.resolve(war);
+            resolved.remove(war);
+            app.artifact = war;
+            app.dependencies = resolved;
         }
     }
 
     void run(String[] args) {
         try {
             tomcat.start();
-
-            for (AppInfo app : apps) {
-                try {
-                    app.context.start();
-                } catch (LifecycleException e) {
-                    e.printStackTrace();
-                }
-            }
-
             new CountDownLatch(1).await();
         } catch (Exception e) {
             throw new UnsupportedOperationException(e);
