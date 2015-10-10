@@ -1,0 +1,10 @@
+dependencies {
+
+	compile("org.springframework.boot:spring-boot-starter-tomcat:${springBootVersion}") {
+		exclude module: 'tomcat-embed-core'
+	}
+
+	compile("org.apache.tomcat.embed:tomcat-embed-core:${tomcatVersion}")
+	compile("org.apache.tomcat.embed:tomcat-embed-jasper:${tomcatVersion}")
+
+}
