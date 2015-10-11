@@ -14,11 +14,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.util.Assert;
 
 import org.apache.catalina.Context;
+import org.apache.catalina.LifecycleException;
 import org.apache.catalina.core.StandardContext;
 import org.apache.catalina.core.StandardEngine;
 import org.apache.catalina.core.StandardHost;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.catalina.valves.RemoteIpValve;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -32,15 +35,17 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * @author <a href="mailto:patrikbeno@gmail.com">Patrik Beno</a>
  */
 @SpringBootApplication
 public class Main {
+
+    static Logger LOG = LoggerFactory.getLogger(Main.class);
 
     @Autowired
     ApplicationContext ctx;
@@ -68,7 +73,7 @@ public class Main {
     ///
 
     @Bean
-    Tomcat tomcat() throws ServletException {
+    Tomcat tomcat(MyManager manager) throws ServletException {
         Assert.isTrue(basedir.exists() || basedir.mkdirs(), basedir.getAbsolutePath());
         Assert.isTrue(deploydir.exists() || deploydir.mkdirs(), deploydir.getAbsolutePath());
 
@@ -77,7 +82,7 @@ public class Main {
         tomcat.setBaseDir(basedir.getAbsolutePath());
         tomcat.getHost().setStartStopThreads(3);
         tomcat.getHost().setDeployOnStartup(false);
-        //((StandardHost) tomcat.getHost()).setStartChildren(false);
+        ((StandardHost) tomcat.getHost()).setStartChildren(false);
 
         tomcat.addUser("admin", "admin");
         tomcat.addRole("admin", "manager-gui");
@@ -88,6 +93,8 @@ public class Main {
         ((StandardEngine) tomcat.getEngine()).addValve(v);
 
         Context ctx = tomcat.addContext("", null);
+        ctx.setManager(manager);
+
         tomcat.addServlet("", "Versions", new HttpServlet() {
             @Override
             protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -121,23 +128,7 @@ public class Main {
             protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
                 updateApps();
                 for (AppInfo app : apps) {
-                    try {
-                        if (app.context != null) { app.context.stop(); }
-                        tomcat.getHost().removeChild(app.context);
-                        app.context = null;
-
-                        StandardContext c = (StandardContext) tomcat.addWebapp(
-                              app.contextPath,  app.artifact.getFile().getAbsolutePath());
-                        c.setPrivileged(true);
-                        c.setResources(new MyWebRoot(c, app));
-
-                        app.context = c;
-
-                        c.start();
-
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    redeploy(app);
                 }
                 resp.sendRedirect("/");
             }
@@ -152,8 +143,8 @@ public class Main {
             String gav = m.group(2);
             Artifact artifact = Artifact.parse(gav);
             AppInfo app = new AppInfo(
-                    path != null ? path : artifact.getArtifactId(),
-                    artifact);
+                  path != null ? path : artifact.getArtifactId(),
+                  artifact);
             apps.add(app);
             index.put(artifact, app);
         }
@@ -171,9 +162,45 @@ public class Main {
         }
     }
 
+
+    void redeploy(AppInfo app) {
+        try {
+            long started = System.currentTimeMillis();
+
+            if (app.context != null) { app.context.stop(); }
+            tomcat.getHost().removeChild(app.context);
+            app.context = null;
+
+            LOG.info("Undeployed {} in {} msec", app.contextPath, System.currentTimeMillis() - started);
+
+            started = System.currentTimeMillis();
+
+            StandardContext c = (StandardContext) tomcat.addWebapp(
+                  app.contextPath,  app.artifact.getFile().getAbsolutePath());
+            c.setPrivileged(true);
+            c.setResources(new MyWebRoot(c, app));
+            c.setManager(ctx.getBean(MyManager.class));
+
+            app.context = c;
+
+            c.start();
+
+            LOG.info("Deployed {} in {} msec", app.contextPath, System.currentTimeMillis() - started);
+
+        } catch (LifecycleException e) {
+            throw new UnsupportedOperationException(e);
+        } catch (ServletException e) {
+            throw new UnsupportedOperationException(e);
+        }
+    }
+
     void run(String[] args) {
         try {
             tomcat.start();
+            updateApps();
+            for (AppInfo app : apps) {
+                ForkJoinPool.commonPool().submit(()->{redeploy(app);});
+            }
             new CountDownLatch(1).await();
         } catch (Exception e) {
             throw new UnsupportedOperationException(e);
