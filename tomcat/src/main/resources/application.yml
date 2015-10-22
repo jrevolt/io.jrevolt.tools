@@ -1,0 +1,11 @@
+
+
+
+tomcat:
+   port:       ${port:8080}
+   basedir:    ${user.home}/.tomcat
+   deploydir:  ${tomcat.basedir}/webapps
+
+
+---
+spring.profiles: production

@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -43,6 +44,7 @@ import java.util.regex.Pattern;
  * @author <a href="mailto:patrikbeno@gmail.com">Patrik Beno</a>
  */
 @SpringBootApplication
+@EnableConfigurationProperties
 public class Main {
 
     static Logger LOG = LoggerFactory.getLogger(Main.class);
